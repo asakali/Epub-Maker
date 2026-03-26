@@ -4,7 +4,7 @@ import sys
 import html
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-
+# 作者：龙骑兵
 
 def resource_path(relative_path):
     """读取打包进程序的资源"""
