@@ -101,6 +101,11 @@
 - Python 3
 - 标准库依赖：`tkinter`、`os`、`re`、`html` 等
 
+## exe编译方法
+```
+pyinstaller --add-data "epub maker.ico;." -F -w -i "epub maker.ico" "epub maker.py"
+```
+
 ## 许可模式
 本项目采用 GNU 通用公共许可证 v3.0 (GPL-3.0) 授权。
 除特别注明外，仓库内源码与相关素材文件均按本项目许可证发布。
