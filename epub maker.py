@@ -201,11 +201,16 @@ class EpubMakerApp:
         )
         self.btn_generate.grid(row=3, column=0, sticky="ew", pady=4)
 
+        self.btn_open_folder = ttk.Button(
+            right_frame, text="打开文件夹", command=self.open_app_folder
+        )
+        self.btn_open_folder.grid(row=4, column=0, sticky="ew", pady=4)
+
         level_frame = ttk.LabelFrame(right_frame, text="HTML 级别")
-        level_frame.grid(row=4, column=0, sticky="ew", pady=(10, 6))
+        level_frame.grid(row=5, column=0, sticky="ew", pady=(10, 6))
         level_frame.columnconfigure(1, weight=1)
 
-        default_keywords = ["卷", "章", "", ""]
+        default_keywords = ["章", "", "", ""]
         for idx, default_keyword in enumerate(default_keywords, start=1):
             ttk.Label(level_frame, text=f"H{idx}").grid(
                 row=idx - 1, column=0, sticky="w", padx=(6, 4), pady=3
@@ -216,7 +221,7 @@ class EpubMakerApp:
             self.heading_vars[idx] = var
 
         ttk.Separator(right_frame, orient="horizontal").grid(
-            row=5, column=0, sticky="ew", pady=10
+            row=6, column=0, sticky="ew", pady=10
         )
 
         note = (
@@ -229,7 +234,7 @@ class EpubMakerApp:
             "6. 再次分析后生成HTML"
         )
         ttk.Label(right_frame, text=note, justify="left").grid(
-            row=6, column=0, sticky="nw"
+            row=7, column=0, sticky="nw"
         )
 
         # 底部状态栏
@@ -280,7 +285,6 @@ class EpubMakerApp:
 <body>
   <h2 title="{{TITLE}}"></h2>
   <p class="k2"><span class="k2h">{{CHAPTER_NO}}</span><br/>{{CHAPTER_SUBTITLE}}</p>
-  <br/><img src="../Images/line.png"/><br/><br/>
 {{CONTENT}}
 </body>
 </html>
@@ -755,6 +759,16 @@ class EpubMakerApp:
                     f.write(html_content)
 
         messagebox.showinfo("完成", f"HTML 已输出到目录：\n{self.output_dir}")
+
+    def open_app_folder(self):
+        if not os.path.isdir(self.base_dir):
+            messagebox.showerror("打开失败", f"目录不存在：\n{self.base_dir}")
+            return
+
+        try:
+            os.startfile(self.base_dir)
+        except Exception as exc:
+            messagebox.showerror("打开失败", f"无法打开目录：\n{exc}")
 
     def clear_search_highlight(self):
         self.text_widget.tag_remove("search_hit", "1.0", "end")
