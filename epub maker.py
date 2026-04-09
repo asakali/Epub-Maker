@@ -28,6 +28,8 @@ def app_base_path():
 
 
 class EpubMakerApp:
+    MANUAL_HEADING_MARKER = "【--】"
+
     def __init__(self, root):
         self.root = root
         self.root.title("Epub Maker")
@@ -285,7 +287,8 @@ class EpubMakerApp:
             "3. 点击左侧章节定位\n"
             "4. 可直接改中间文本\n"
             "5. 根据层级关键字配置 H1-H4\n"
-            "6. 生成HTML或EPUB"
+            "6. 生成HTML或EPUB\n"
+            "7. 使用【--】手动标注章节"
         )
         ttk.Label(right_frame, text=note, justify="left").grid(
             row=9, column=0, sticky="nw"
@@ -525,6 +528,16 @@ class EpubMakerApp:
         number = self.extract_cn_number(prefix)
         return prefix, subtitle, full_title, number
 
+    def is_manual_heading_title(self, line):
+        line = line.strip()
+        marker = self.MANUAL_HEADING_MARKER
+        return line.startswith(marker) and len(line) > len(marker)
+
+    def split_manual_heading_title(self, title_line):
+        marker = self.MANUAL_HEADING_MARKER
+        title = title_line.strip()[len(marker) :].strip()
+        return title, title
+
     def extract_cn_number(self, text):
         m = re.search(r"第([一二三四五六七八九十百千万零〇两\d]+)", text)
         if not m:
@@ -704,6 +717,47 @@ class EpubMakerApp:
         for i, raw_line in enumerate(lines):
             line = raw_line.strip()
             if not line:
+                continue
+
+            if self.is_manual_heading_title(line):
+                prefix, full_title = self.split_manual_heading_title(line)
+                if not full_title:
+                    continue
+
+                level = 1
+                warning = ""
+                if self.has_suspicious_title_tail(full_title) or self.next_line_starts_with_punct(
+                    lines, i, heading_configs
+                ):
+                    warning = "⚠"
+
+                prev_numbers.pop(level, None)
+                for lower_level in list(prev_numbers):
+                    if lower_level > level:
+                        prev_numbers.pop(lower_level, None)
+
+                parent_title = None
+                parent_titles[level] = full_title
+                for lower_level in list(parent_titles):
+                    if lower_level > level:
+                        parent_titles.pop(lower_level, None)
+
+                found.append(
+                    {
+                        "type": "manual-heading",
+                        "level": level,
+                        "keyword": self.MANUAL_HEADING_MARKER,
+                        "seq": f"{seq_counter:04d}",
+                        "title": full_title,
+                        "prefix": prefix,
+                        "subtitle": "",
+                        "warning": warning,
+                        "start_line": i,
+                        "number": None,
+                        "parent_title": parent_title,
+                    }
+                )
+                seq_counter += 1
                 continue
 
             matched_config = None
