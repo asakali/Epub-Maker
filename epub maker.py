@@ -28,7 +28,7 @@ def app_base_path():
 
 
 class EpubMakerApp:
-    MANUAL_HEADING_MARKER = "【--】"
+    MANUAL_HEADING_PATTERN = re.compile(r"^【--([1-4])】(.+)$")
 
     def __init__(self, root):
         self.root = root
@@ -292,7 +292,7 @@ class EpubMakerApp:
             "3. 可直接改中间文本\n"
             "4. 根据层级关键字配置 H1-H4\n"
             "5. 生成HTML或EPUB\n"
-            "6. 使用【--】手动标注章节"
+            "6. 使用【--1】到【--4】手动标注 H1-H4"
         )
         ttk.Label(right_frame, text=note, justify="left").grid(
             row=9, column=0, sticky="nw"
@@ -534,13 +534,16 @@ class EpubMakerApp:
 
     def is_manual_heading_title(self, line):
         line = line.strip()
-        marker = self.MANUAL_HEADING_MARKER
-        return line.startswith(marker) and len(line) > len(marker)
+        match = self.MANUAL_HEADING_PATTERN.match(line)
+        return bool(match and match.group(2).strip())
 
     def split_manual_heading_title(self, title_line):
-        marker = self.MANUAL_HEADING_MARKER
-        title = title_line.strip()[len(marker) :].strip()
-        return title, title
+        match = self.MANUAL_HEADING_PATTERN.match(title_line.strip())
+        if not match:
+            return 1, "", ""
+        level = int(match.group(1) or 1)
+        title = match.group(2).strip()
+        return level, title, title
 
     def extract_cn_number(self, text):
         m = re.search(r"第([一二三四五六七八九十百千万零〇两\d]+)", text)
@@ -756,11 +759,10 @@ class EpubMakerApp:
                 continue
 
             if self.is_manual_heading_title(line):
-                prefix, full_title = self.split_manual_heading_title(line)
+                level, prefix, full_title = self.split_manual_heading_title(line)
                 if not full_title:
                     continue
 
-                level = 1
                 warning = ""
                 if self.has_suspicious_title_tail(full_title) or self.next_line_starts_with_punct(
                     lines, i, heading_configs
@@ -782,7 +784,7 @@ class EpubMakerApp:
                     {
                         "type": "manual-heading",
                         "level": level,
-                        "keyword": self.MANUAL_HEADING_MARKER,
+                        "keyword": f"【--{level}】",
                         "seq": f"{seq_counter:04d}",
                         "title": full_title,
                         "prefix": prefix,
