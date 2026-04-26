@@ -1,15 +1,16 @@
 import os
 import re
 import sys
-import html
 import shutil
-import zipfile
 import tempfile
-import uuid
+import platform
+import subprocess
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-from datetime import datetime, timezone
-from xml.etree import ElementTree as ET
+
+import title_utils
+import html_renderer
+import epub_builder
 
 # 作者：龙骑兵
 
@@ -29,9 +30,6 @@ def app_base_path():
 
 
 class EpubMakerApp:
-    MANUAL_HEADING_PATTERN = re.compile(r"^【--([1-4])】(.+)$")
-    MANUAL_NON_HEADING_PREFIX = "【==】"
-
     def __init__(self, root):
         self.root = root
         self.root.title("Epub Maker")
@@ -290,7 +288,7 @@ class EpubMakerApp:
         note = (
             "说明：\n"
             "1. 读取TXT，分析章节\n"
-            "2. 点击左侧章节定位，接改中间文本\n"
+            "2. 点击左侧章节定位，修改中间文本\n"
             "3. 根据层级关键字配置 H1-H4\n"
             "4. 生成HTML或EPUB\n"
             "5. 使用【--1】到【--4】手动标注 H1-H4\n"
@@ -420,9 +418,6 @@ class EpubMakerApp:
         self.text_widget.see(idx_start)
         self.text_widget.focus_set()
 
-    def safe_filename(self, seq, title):
-        return f"{seq}.html"
-
     def safe_output_name(self, name, default):
         cleaned = re.sub(r'[\\/:*?"<>|]+', "_", name.strip())
         cleaned = cleaned.rstrip(". ")
@@ -481,11 +476,11 @@ class EpubMakerApp:
             if not block_lines:
                 continue
 
-            title_line = self.strip_manual_non_heading_marker(block_lines[0]).strip()
+            title_line = title_utils.strip_manual_non_heading_marker(block_lines[0]).strip()
             paragraphs = [
-                self.strip_manual_non_heading_marker(line).strip()
+                title_utils.strip_manual_non_heading_marker(line).strip()
                 for line in block_lines[1:]
-                if self.strip_manual_non_heading_marker(line).strip()
+                if title_utils.strip_manual_non_heading_marker(line).strip()
             ]
             sections.append(
                 {
@@ -520,167 +515,6 @@ class EpubMakerApp:
 
         return configs
 
-    def split_title(self, title_line, keyword):
-        """
-        返回:
-        prefix = 第九章
-        subtitle = 二面
-        full_title = 第九章 二面 或 第九章
-        number = 9（用于连续性检查，尽量转换，失败则 None）
-        """
-        pattern = rf"^(第[一二三四五六七八九十百千万零〇两\d]+{re.escape(keyword)})(?:\s+(.*))?$"
-
-        m = re.match(pattern, title_line.strip())
-        if not m:
-            return None, None, title_line.strip(), None
-
-        prefix = m.group(1).strip()
-        subtitle = (m.group(2) or "").strip()
-        full_title = prefix if not subtitle else f"{prefix} {subtitle}"
-        number = self.extract_cn_number(prefix)
-        return prefix, subtitle, full_title, number
-
-    def is_manual_heading_title(self, line):
-        line = line.strip()
-        match = self.MANUAL_HEADING_PATTERN.match(line)
-        return bool(match and match.group(2).strip())
-
-    def is_manual_non_heading(self, line):
-        return line.strip().startswith(self.MANUAL_NON_HEADING_PREFIX)
-
-    def strip_manual_non_heading_marker(self, line):
-        leading_match = re.match(r"^(\s*)", line)
-        leading = leading_match.group(1) if leading_match else ""
-        content = line[len(leading) :]
-        if content.startswith(self.MANUAL_NON_HEADING_PREFIX):
-            return leading + content[len(self.MANUAL_NON_HEADING_PREFIX) :].lstrip()
-        return line
-
-    def split_manual_heading_title(self, title_line):
-        match = self.MANUAL_HEADING_PATTERN.match(title_line.strip())
-        if not match:
-            return 1, "", ""
-        level = int(match.group(1) or 1)
-        title = match.group(2).strip()
-        return level, title, title
-
-    def extract_cn_number(self, text):
-        m = re.search(r"第([一二三四五六七八九十百千万零〇两\d]+)", text)
-        if not m:
-            return None
-        s = m.group(1)
-        if s.isdigit():
-            return int(s)
-        return self.chinese_to_int(s)
-
-    def chinese_to_int(self, s):
-        # 支持常见中文数字，足够用于章节判断
-        digit_map = {
-            "零": 0,
-            "〇": 0,
-            "一": 1,
-            "二": 2,
-            "两": 2,
-            "三": 3,
-            "四": 4,
-            "五": 5,
-            "六": 6,
-            "七": 7,
-            "八": 8,
-            "九": 9,
-        }
-        unit_map = {"十": 10, "百": 100, "千": 1000, "万": 10000}
-
-        if not s:
-            return None
-
-        total = 0
-        section = 0
-        number = 0
-
-        for ch in s:
-            if ch in digit_map:
-                number = digit_map[ch]
-            elif ch in unit_map:
-                unit = unit_map[ch]
-                if unit == 10000:
-                    section = (section + (number if number != 0 else 0)) * unit
-                    total += section
-                    section = 0
-                    number = 0
-                else:
-                    if number == 0:
-                        number = 1
-                    section += number * unit
-                    number = 0
-            else:
-                return None
-
-        return total + section + number
-
-    def is_heading_title(self, line, keyword):
-        line = line.strip()
-        if not line:
-            return False
-        if len(line) > 30:
-            return False
-        pattern = (
-            rf"^第[一二三四五六七八九十百千万零〇两\d]+{re.escape(keyword)}(?:\s*.*)?$"
-        )
-        return re.match(pattern, line) is not None
-
-    def has_suspicious_title_tail(self, line):
-        keywords = [
-            "求订阅",
-            "求月票",
-            "求推荐票",
-            "补昨天",
-            "补更",
-            "加更",
-            "今日",
-            "二更",
-            "三更",
-            "四更",
-            "五更",
-            "上架感言",
-            "感谢",
-            "PS",
-            "ps",
-            "读者",
-            "请假",
-        ]
-        return any(k in line for k in keywords)
-
-    def next_line_starts_with_punct(self, lines, index, heading_configs):
-        if index + 1 >= len(lines):
-            return False
-
-        next_line = lines[index + 1].strip()
-        if not next_line:
-            return False
-
-        for config in heading_configs:
-            if self.is_heading_title(next_line, config["keyword"]):
-                return False
-
-        suspicious_prefixes = (
-            "！",
-            "？",
-            "…",
-            "——",
-            "—",
-            "）",
-            "】",
-            "”",
-            "」",
-            "』",
-            "：",
-            "、",
-            ".",
-            "。",
-        )
-        return next_line.startswith(suspicious_prefixes)
-
     # =========================
     # 功能：读取TXT
     # =========================
@@ -701,7 +535,7 @@ class EpubMakerApp:
                 break
             except UnicodeDecodeError:
                 continue
-            except Exception as e:
+            except OSError as e:
                 messagebox.showerror("读取失败", f"读取文件时出错：\n{e}")
                 return
 
@@ -735,12 +569,12 @@ class EpubMakerApp:
             if not path:
                 return
 
-        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        text = text.replace("\r", "\n")
 
         try:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(text)
-        except Exception as e:
+        except OSError as e:
             messagebox.showerror("保存失败", f"保存文件时出错：\n{e}")
             return
 
@@ -777,18 +611,18 @@ class EpubMakerApp:
             if not line:
                 continue
 
-            if self.is_manual_non_heading(line):
+            if title_utils.is_manual_non_heading(line):
                 continue
 
-            if self.is_manual_heading_title(line):
-                level, prefix, full_title = self.split_manual_heading_title(line)
+            if title_utils.is_manual_heading_title(line):
+                level, prefix, full_title = title_utils.split_manual_heading_title(line)
                 if not full_title:
                     continue
 
                 warning = ""
-                if self.has_suspicious_title_tail(
+                if title_utils.has_suspicious_title_tail(
                     full_title
-                ) or self.next_line_starts_with_punct(lines, i, heading_configs):
+                ) or title_utils.next_line_starts_with_punct(lines, i, heading_configs):
                     warning = "⚠"
 
                 prev_numbers.pop(level, None)
@@ -822,7 +656,7 @@ class EpubMakerApp:
 
             matched_config = None
             for config in heading_configs:
-                if self.is_heading_title(line, config["keyword"]):
+                if title_utils.is_heading_title(line, config["keyword"]):
                     matched_config = config
                     break
 
@@ -830,7 +664,7 @@ class EpubMakerApp:
                 continue
 
             level = matched_config["level"]
-            prefix, subtitle, full_title, number = self.split_title(
+            prefix, subtitle, full_title, number = title_utils.split_title(
                 line, matched_config["keyword"]
             )
             warning = ""
@@ -841,7 +675,7 @@ class EpubMakerApp:
                 and number != prev_number + 1
             ):
                 warning = "⚠"
-            if self.has_suspicious_title_tail(line) or self.next_line_starts_with_punct(
+            if title_utils.has_suspicious_title_tail(line) or title_utils.next_line_starts_with_punct(
                 lines, i, heading_configs
             ):
                 warning = "⚠"
@@ -954,10 +788,10 @@ class EpubMakerApp:
             if name.lower().endswith(".html") or name.lower().endswith(".xhtml"):
                 try:
                     os.remove(os.path.join(self.output_dir, name))
-                except Exception:
+                except OSError:
                     pass
 
-        documents = self.build_rendered_documents(
+        documents = html_renderer.build_rendered_documents(
             sections, group_template, content_template, extension="html"
         )
         for document in documents:
@@ -966,61 +800,6 @@ class EpubMakerApp:
                 f.write(document["content"])
 
         messagebox.showinfo("完成", f"HTML 已输出到目录：\n{self.output_dir}")
-
-    def build_rendered_documents(
-        self, sections, group_template, content_template, extension
-    ):
-        documents = []
-        for section in sections:
-            item = section["item"]
-            filename = f'{item["seq"]}.{extension}'
-            if section["is_group"]:
-                content = self.render_group(group_template, item["title"])
-            else:
-                content = self.render_content(
-                    content_template=content_template,
-                    full_title=item["title"],
-                    heading_tag=f'h{min(item["level"], 6)}',
-                    chapter_no=item["prefix"] or section["title_line"],
-                    chapter_subtitle=item["subtitle"] or "",
-                    paragraphs=section["paragraphs"],
-                )
-
-            documents.append(
-                {
-                    "filename": filename,
-                    "content": content,
-                    "level": item["level"],
-                    "title": item["title"],
-                }
-            )
-        return documents
-
-    def get_cover_info(self):
-        if not self.cover_image_path:
-            return None
-
-        source_ext = os.path.splitext(self.cover_image_path)[1].lower()
-        ext_map = {
-            ".jpg": (".jpg", "image/jpeg"),
-            ".jpeg": (".jpg", "image/jpeg"),
-            ".png": (".png", "image/png"),
-            ".webp": (".webp", "image/webp"),
-            ".bmp": (".bmp", "image/bmp"),
-        }
-        if source_ext not in ext_map:
-            messagebox.showwarning("提示", "封面图片仅支持 jpg、png、webp、bmp。")
-            return None
-
-        output_ext, media_type = ext_map[source_ext]
-        filename = f"cover{output_ext}"
-        return {
-            "source_path": self.cover_image_path,
-            "filename": filename,
-            "href": f"Images/{filename}",
-            "src": f"../Images/{filename}",
-            "media_type": media_type,
-        }
 
     def generate_epub(self):
         if not self.items:
@@ -1031,7 +810,10 @@ class EpubMakerApp:
         if not metadata:
             return
 
-        cover_info = self.get_cover_info()
+        cover_info = html_renderer.get_cover_info(self.cover_image_path)
+        if self.cover_image_path and cover_info is None:
+            messagebox.showwarning("提示", "封面图片仅支持 jpg、png、webp、bmp。")
+            return
 
         if not os.path.exists(self.template_epub_path):
             messagebox.showerror(
@@ -1056,18 +838,18 @@ class EpubMakerApp:
             messagebox.showwarning("提示", "没有可导出的章节内容。")
             return
 
-        documents = self.build_rendered_documents(
+        documents = html_renderer.build_rendered_documents(
             sections, group_template, content_template, extension="xhtml"
         )
 
         temp_dir = tempfile.mkdtemp(prefix="epub-maker-", dir=self.base_dir)
         try:
-            self.extract_epub_template(self.template_epub_path, temp_dir)
-            self.write_epub_contents(temp_dir, metadata, cover_info, documents)
+            epub_builder.extract_epub_template(self.template_epub_path, temp_dir)
+            epub_builder.write_epub_contents(temp_dir, metadata, cover_info, documents)
 
             output_name = self.safe_output_name(metadata["title"], "book")
             output_path = os.path.join(self.epub_output_dir, f"{output_name}.epub")
-            self.pack_epub(temp_dir, output_path)
+            epub_builder.pack_epub(temp_dir, output_path)
         except Exception as exc:
             messagebox.showerror("生成失败", f"生成 EPUB 时出错：\n{exc}")
             return
@@ -1076,364 +858,19 @@ class EpubMakerApp:
 
         messagebox.showinfo("完成", f"EPUB 已输出到目录：\n{output_path}")
 
-    def extract_epub_template(self, epub_path, target_dir):
-        with zipfile.ZipFile(epub_path, "r") as zf:
-            zf.extractall(target_dir)
-
-    def write_epub_contents(self, root_dir, metadata, cover_info, documents):
-        oebps_dir = os.path.join(root_dir, "OEBPS")
-        text_dir = os.path.join(oebps_dir, "Text")
-        images_dir = os.path.join(oebps_dir, "Images")
-        os.makedirs(text_dir, exist_ok=True)
-        os.makedirs(images_dir, exist_ok=True)
-
-        self.cleanup_old_text_files(text_dir)
-        self.cleanup_old_cover_images(images_dir)
-
-        for document in documents:
-            out_path = os.path.join(text_dir, document["filename"])
-            with open(out_path, "w", encoding="utf-8") as f:
-                f.write(document["content"])
-
-        if cover_info:
-            cover_output_path = os.path.join(images_dir, cover_info["filename"])
-            shutil.copyfile(cover_info["source_path"], cover_output_path)
-
-        coverpage_path = os.path.join(text_dir, "coverpage.xhtml")
-        nav_path = os.path.join(text_dir, "nav.xhtml")
-        opf_path = os.path.join(oebps_dir, "content.opf")
-
-        self.update_coverpage(
-            coverpage_path, metadata["title"], cover_info["src"] if cover_info else None
-        )
-        self.update_nav(nav_path, documents)
-        self.update_content_opf(opf_path, metadata, cover_info, documents)
-
-    def cleanup_old_text_files(self, text_dir):
-        for name in os.listdir(text_dir):
-            lower_name = name.lower()
-            if not lower_name.endswith((".html", ".xhtml")):
-                continue
-            if lower_name in {"coverpage.xhtml", "nav.xhtml"}:
-                continue
-            try:
-                os.remove(os.path.join(text_dir, name))
-            except Exception:
-                pass
-
-    def cleanup_old_cover_images(self, images_dir):
-        for name in os.listdir(images_dir):
-            lower_name = name.lower()
-            if not lower_name.startswith("cover."):
-                continue
-            try:
-                os.remove(os.path.join(images_dir, name))
-            except Exception:
-                pass
-
-    def update_coverpage(self, coverpage_path, book_title, cover_src):
-        with open(coverpage_path, "r", encoding="utf-8") as f:
-            content = f.read()
-
-        escaped_title = html.escape(book_title)
-
-        content, title_count = re.subn(
-            r"(<title>).*?(</title>)",
-            lambda m: f"{m.group(1)}{escaped_title}{m.group(2)}",
-            content,
-            count=1,
-            flags=re.S,
-        )
-
-        if title_count == 0:
-            raise RuntimeError("模板中的 coverpage.xhtml 缺少 title 节点。")
-
-        content = re.sub(
-            r'(<h1\b[^>]*\btitle=")[^"]*(")',
-            lambda m: f"{m.group(1)}{html.escape(book_title, quote=True)}{m.group(2)}",
-            content,
-            count=1,
-            flags=re.S,
-        )
-
-        if cover_src:
-            escaped_src = html.escape(cover_src, quote=True)
-            content, img_count = re.subn(
-                r'(<img\b[^>]*\bsrc=")[^"]*(")',
-                lambda m: f"{m.group(1)}{escaped_src}{m.group(2)}",
-                content,
-                count=1,
-                flags=re.S,
-            )
-            if img_count == 0:
-                raise RuntimeError("模板中的 coverpage.xhtml 缺少封面图片节点。")
-        else:
-            content = re.sub(
-                r"\s*<img\b[^>]*?/?>\s*", "\n", content, count=1, flags=re.S
-            )
-
-        with open(coverpage_path, "w", encoding="utf-8", newline="\n") as f:
-            f.write(content)
-
-    def update_nav(self, nav_path, documents):
-        with open(nav_path, "r", encoding="utf-8") as f:
-            content = f.read()
-
-        content = re.sub(
-            r"(<title>).*?(</title>)",
-            r"\1目录\2",
-            content,
-            count=1,
-            flags=re.S,
-        )
-        content = re.sub(
-            r'(<html\b[^>]*\blang=")[^"]*(")',
-            r"\1zh-CN\2",
-            content,
-            count=1,
-            flags=re.S,
-        )
-        content = re.sub(
-            r'(<html\b[^>]*\bxml:lang=")[^"]*(")',
-            r"\1zh-CN\2",
-            content,
-            count=1,
-            flags=re.S,
-        )
-        content = re.sub(
-            r"(<link\b[^>]*\bhref=\")[^\"]*(\"[^>]*>)",
-            r"\1../Styles/main.css\2",
-            content,
-            count=1,
-            flags=re.S,
-        )
-        content = re.sub(
-            r"(<nav\b[^>]*epub:type=\"toc\"[^>]*>\s*<h1>).*?(</h1>)",
-            r"\1目录\2",
-            content,
-            count=1,
-            flags=re.S,
-        )
-
-        nav_html = self.build_nav_html(documents)
-        content, toc_count = re.subn(
-            r"(<nav\b[^>]*epub:type=\"toc\"[^>]*>.*?<ol>)(.*?)(</ol>)",
-            lambda m: f"{m.group(1)}\n{nav_html}\n    {m.group(3)}",
-            content,
-            count=1,
-            flags=re.S,
-        )
-
-        if toc_count == 0:
-            raise RuntimeError("模板中的 nav.xhtml 缺少目录列表。")
-
-        with open(nav_path, "w", encoding="utf-8", newline="\n") as f:
-            f.write(content)
-
-    def build_nav_tree(self, documents):
-        nodes = []
-        stack = []
-        for document in documents:
-            node = {"document": document, "children": []}
-            level = max(1, int(document["level"]))
-
-            while stack and stack[-1]["level"] >= level:
-                stack.pop()
-
-            if stack:
-                stack[-1]["node"]["children"].append(node)
-            else:
-                nodes.append(node)
-
-            stack.append({"level": level, "node": node})
-
-        return nodes
-
-    def build_nav_html(self, documents):
-        tree_nodes = self.build_nav_tree(documents)
-        lines = [
-            "      <li>",
-            '        <a href="coverpage.xhtml">封面</a>',
-            "      </li>",
-        ]
-        lines.extend(self.render_nav_nodes(tree_nodes, indent="      "))
-        return "\n".join(lines)
-
-    def render_nav_nodes(self, nodes, indent):
-        lines = []
-        for node in nodes:
-            title = html.escape(node["document"]["title"])
-            href = html.escape(node["document"]["filename"], quote=True)
-            lines.append(f"{indent}<li>")
-            lines.append(f'{indent}  <a href="{href}">{title}</a>')
-            if node["children"]:
-                lines.append(f"{indent}  <ol>")
-                lines.extend(self.render_nav_nodes(node["children"], indent + "    "))
-                lines.append(f"{indent}  </ol>")
-            lines.append(f"{indent}</li>")
-        return lines
-
-    def update_content_opf(self, opf_path, metadata, cover_info, documents):
-        opf_ns = "http://www.idpf.org/2007/opf"
-        dc_ns = "http://purl.org/dc/elements/1.1/"
-        ET.register_namespace("", opf_ns)
-        ET.register_namespace("dc", dc_ns)
-
-        tree = ET.parse(opf_path)
-        root = tree.getroot()
-        metadata_node = root.find(f"{{{opf_ns}}}metadata")
-        manifest_node = root.find(f"{{{opf_ns}}}manifest")
-        spine_node = root.find(f"{{{opf_ns}}}spine")
-        if metadata_node is None or manifest_node is None or spine_node is None:
-            raise RuntimeError("模板中的 content.opf 结构不完整。")
-
-        self.set_or_create_dc_text(metadata_node, dc_ns, "language", "zh-CN")
-        self.set_or_create_dc_text(metadata_node, dc_ns, "title", metadata["title"])
-        self.set_or_create_dc_text(metadata_node, dc_ns, "creator", metadata["author"])
-        creator_node = metadata_node.find(f"{{{dc_ns}}}creator")
-        if creator_node is not None:
-            creator_node.set(f"{{{opf_ns}}}role", "aut")
-
-        for subject_node in list(metadata_node.findall(f"{{{dc_ns}}}subject")):
-            metadata_node.remove(subject_node)
-        for subject in metadata["subjects"]:
-            subject_node = ET.SubElement(metadata_node, f"{{{dc_ns}}}subject")
-            subject_node.text = subject
-
-        modified_node = None
-        for meta_node in metadata_node.findall(f"{{{opf_ns}}}meta"):
-            if meta_node.get("property") == "dcterms:modified":
-                modified_node = meta_node
-                break
-        if modified_node is None:
-            modified_node = ET.SubElement(metadata_node, f"{{{opf_ns}}}meta")
-            modified_node.set("property", "dcterms:modified")
-        modified_node.text = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-        cover_item_id = "cover-image"
-        nav_id = None
-        coverpage_id = None
-        for item_node in list(manifest_node.findall(f"{{{opf_ns}}}item")):
-            href = item_node.get("href", "")
-            item_id = item_node.get("id", "")
-            if href.startswith("Text/") and href not in {
-                "Text/coverpage.xhtml",
-                "Text/nav.xhtml",
-            }:
-                manifest_node.remove(item_node)
-                continue
-            if href.startswith("Images/cover"):
-                manifest_node.remove(item_node)
-                continue
-            if href == "Text/nav.xhtml":
-                nav_id = item_id
-                item_node.set("href", "Text/nav.xhtml")
-                item_node.set("media-type", "application/xhtml+xml")
-                item_node.set("properties", "nav")
-            if href == "Text/coverpage.xhtml":
-                coverpage_id = item_id
-
-        if cover_info:
-            cover_item = ET.SubElement(manifest_node, f"{{{opf_ns}}}item")
-            cover_item.set("id", cover_item_id)
-            cover_item.set("href", cover_info["href"])
-            cover_item.set("media-type", cover_info["media_type"])
-            cover_item.set("properties", "cover-image")
-
-        chapter_ids = []
-        for index, document in enumerate(documents, start=1):
-            item_node = ET.SubElement(manifest_node, f"{{{opf_ns}}}item")
-            item_id = f"chapter-{index:04d}"
-            item_node.set("id", item_id)
-            item_node.set("href", f'Text/{document["filename"]}')
-            item_node.set("media-type", "application/xhtml+xml")
-            chapter_ids.append(item_id)
-
-        for itemref_node in list(spine_node.findall(f"{{{opf_ns}}}itemref")):
-            spine_node.remove(itemref_node)
-
-        if coverpage_id:
-            cover_ref = ET.SubElement(spine_node, f"{{{opf_ns}}}itemref")
-            cover_ref.set("idref", coverpage_id)
-
-        for chapter_id in chapter_ids:
-            chapter_ref = ET.SubElement(spine_node, f"{{{opf_ns}}}itemref")
-            chapter_ref.set("idref", chapter_id)
-
-        if nav_id:
-            nav_ref = ET.SubElement(spine_node, f"{{{opf_ns}}}itemref")
-            nav_ref.set("idref", nav_id)
-            nav_ref.set("linear", "no")
-
-        tree.write(opf_path, encoding="utf-8", xml_declaration=True)
-        self.normalize_content_opf(opf_path, opf_ns)
-
-    def set_or_create_dc_text(self, metadata_node, dc_ns, local_name, text):
-        node = metadata_node.find(f"{{{dc_ns}}}{local_name}")
-        if node is None:
-            node = ET.SubElement(metadata_node, f"{{{dc_ns}}}{local_name}")
-        node.text = text
-        return node
-
-    def pack_epub(self, source_dir, output_path):
-        if os.path.exists(output_path):
-            os.remove(output_path)
-
-        mimetype_path = os.path.join(source_dir, "mimetype")
-        if not os.path.exists(mimetype_path):
-            raise RuntimeError("模板中缺少 mimetype 文件。")
-
-        with zipfile.ZipFile(output_path, "w") as zf:
-            zf.write(mimetype_path, "mimetype", compress_type=zipfile.ZIP_STORED)
-            for root_dir, _, files in os.walk(source_dir):
-                for filename in files:
-                    full_path = os.path.join(root_dir, filename)
-                    rel_path = os.path.relpath(full_path, source_dir).replace("\\", "/")
-                    if rel_path == "mimetype":
-                        continue
-                    zf.write(full_path, rel_path, compress_type=zipfile.ZIP_DEFLATED)
-
-    def normalize_content_opf(self, opf_path, opf_ns):
-        with open(opf_path, "r", encoding="utf-8") as f:
-            content = f.read()
-
-        if 'xmlns:opf="' not in content:
-            content = content.replace(
-                "<metadata>",
-                f'<metadata xmlns:opf="{opf_ns}">',
-                1,
-            )
-
-        content = content.replace("<dc:creator role=", "<dc:creator opf:role=")
-
-        with open(opf_path, "w", encoding="utf-8", newline="\n") as f:
-            f.write(content)
-
-    def xhtml_tag(self, local_name):
-        return f"{{http://www.w3.org/1999/xhtml}}{local_name}"
-
-    def local_name(self, tag):
-        return tag.split("}", 1)[-1]
-
-    def find_first_by_tag(self, root, local_name):
-        for node in root.iter():
-            if self.local_name(node.tag) == local_name:
-                return node
-        return None
-
-    def find_child_by_tag(self, root, local_name):
-        for node in root:
-            if self.local_name(node.tag) == local_name:
-                return node
-        return None
-
     def open_app_folder(self):
         if not os.path.isdir(self.base_dir):
             messagebox.showerror("打开失败", f"目录不存在：\n{self.base_dir}")
             return
 
         try:
-            os.startfile(self.base_dir)
+            system = platform.system()
+            if system == "Windows":
+                os.startfile(self.base_dir)
+            elif system == "Darwin":  # Mac
+                subprocess.run(["open", self.base_dir])
+            else:  # Linux
+                subprocess.run(["xdg-open", self.base_dir])
         except Exception as exc:
             messagebox.showerror("打开失败", f"无法打开目录：\n{exc}")
 
@@ -1451,7 +888,6 @@ class EpubMakerApp:
     # =========================
     # 搜索功能
     # =========================
-
     def search_text(self):
         keyword = self.search_var.get().strip()
         self.clear_search_highlight()
@@ -1514,135 +950,6 @@ class EpubMakerApp:
             return
         self.search_index = (self.search_index - 1) % len(self.search_results)
         self.focus_search_result()
-
-    # =========================
-    # 模板渲染
-    # =========================
-    def render_group(self, template, title):
-        # 优先支持占位符模板
-        if "{{TITLE}}" in template:
-            return template.replace("{{TITLE}}", html.escape(title))
-
-        # 否则尝试按常见结构替换
-        result = template
-
-        result = re.sub(
-            r"(<title>).*?(</title>)",
-            rf"\1{html.escape(title)}\2",
-            result,
-            count=1,
-            flags=re.S,
-        )
-        result = re.sub(
-            r'(<h1\b[^>]*title=")[^"]*(")',
-            rf"\1{html.escape(title)}\2",
-            result,
-            count=1,
-            flags=re.S,
-        )
-        result = re.sub(
-            r"(<h1\b[^>]*></h1>\s*)(<p\b[^>]*class=\"k1\"[^>]*>).*?(</p>)",
-            rf"\1\2{html.escape(title)}\3",
-            result,
-            count=1,
-            flags=re.S,
-        )
-        return result
-
-    def render_content(
-        self,
-        content_template,
-        full_title,
-        heading_tag,
-        chapter_no,
-        chapter_subtitle,
-        paragraphs,
-    ):
-        content_html = "\n".join(
-            f'  <p class="lth">{html.escape(p)}</p>' for p in paragraphs
-        )
-
-        # 优先支持占位符模板
-        if "{{TITLE}}" in content_template:
-            result = content_template
-            result = result.replace("{{TITLE}}", html.escape(full_title))
-            result = result.replace("{{CHAPTER_NO}}", html.escape(chapter_no))
-            result = result.replace(
-                "{{CHAPTER_SUBTITLE}}", html.escape(chapter_subtitle)
-            )
-            result = result.replace("{{CONTENT}}", content_html)
-            if heading_tag != "h2":
-                result = result.replace("<h2 ", f"<{heading_tag} ", 1)
-                result = result.replace("</h2>", f"</{heading_tag}>", 1)
-            return result
-
-        # 回退：兼容你当前那种固定模板
-        result = content_template
-
-        # title
-        result = re.sub(
-            r"(<title>).*?(</title>)",
-            rf"\1{html.escape(full_title)}\2",
-            result,
-            count=1,
-            flags=re.S,
-        )
-
-        if heading_tag != "h2":
-            result = re.sub(r"<h2\b", f"<{heading_tag}", result, count=1)
-            result = re.sub(r"</h2>", f"</{heading_tag}>", result, count=1)
-
-        # h2/h3/h4 title=""
-        result = re.sub(
-            rf'(<{heading_tag}\b[^>]*title=")[^"]*(")',
-            rf"\1{html.escape(full_title)}\2",
-            result,
-            count=1,
-            flags=re.S,
-        )
-
-        # <p class="k2"><span class="k2h">第九章</span><br/>二面</p>
-        chapter_head_html = (
-            f'<p class="k2"><span class="k2h">{html.escape(chapter_no)}</span>'
-            f"<br/>{html.escape(chapter_subtitle)}</p>"
-            if chapter_subtitle
-            else f'<p class="k2"><span class="k2h">{html.escape(chapter_no)}</span></p>'
-        )
-
-        result = re.sub(
-            r'<p\b[^>]*class="k2"[^>]*>.*?</p>',
-            chapter_head_html,
-            result,
-            count=1,
-            flags=re.S,
-        )
-
-        # 删除已有正文区：从 k2 标题段之后，到 </body> 之前，保留中间的图片行（如果存在）
-        body_match = re.search(
-            r"(<p\b[^>]*class=\"k2\"[^>]*>.*?</p>)(.*?)(</body>)", result, flags=re.S
-        )
-        if body_match:
-            middle = body_match.group(2)
-
-            # 尽量保留图片那一行
-            img_match = re.search(
-                r"(<br\s*/?><img\b[^>]*?/?>.*?<br\s*/?><br\s*/?>)", middle, flags=re.S
-            )
-            img_block = img_match.group(1) if img_match else "\n"
-
-            replacement = (
-                body_match.group(1)
-                + img_block
-                + "\n"
-                + content_html
-                + "\n"
-                + body_match.group(3)
-            )
-            result = (
-                result[: body_match.start()] + replacement + result[body_match.end() :]
-            )
-
-        return result
 
 
 if __name__ == "__main__":
