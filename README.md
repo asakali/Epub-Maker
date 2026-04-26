@@ -64,11 +64,11 @@
 
 ### 2. EPUB 结构模板
 
-程序会读取根目录下的 `模板.epub` 作为 EPUB 骨架。
+程序会读取根目录下的 `template.epub` 作为 EPUB 骨架。
 
 生成 EPUB 时，程序会：
 
-- 解包 `模板.epub`
+- 解包 `template.epub`
 - 把章节内容写入 `OEBPS/Text/`
 - 更新 `OEBPS/Text/nav.xhtml`
 - 更新 `OEBPS/Text/coverpage.xhtml`
@@ -78,8 +78,8 @@
 
 因此：
 
-- 想改 EPUB 的 CSS，请直接修改 `模板.epub` 内的样式文件
-- 想增加分隔线等静态图片，请直接放进 `模板.epub` 的 `OEBPS/Images/`
+- 想改 EPUB 的 CSS，请直接修改 `template.epub` 内的样式文件
+- 想增加分隔线等静态图片，请直接放进 `template.epub` 的 `OEBPS/Images/`
 - 只要模板里的 XHTML 或 CSS 已经引用这些资源，生成时就会一起保留
 
 ## 文本处理
@@ -127,7 +127,7 @@
 - HTML 模板目录：`template/`
 - HTML 导出目录：`html/`
 - EPUB 导出目录：`epub/`
-- EPUB 模板文件：根目录下的 `模板.epub`
+- EPUB 模板文件：根目录下的 `template.epub`
 
 生成后的文件名按顺序编号，例如：
 
@@ -147,7 +147,7 @@
 
 如果打包为 exe，建议把以下文件放在 exe 同目录：
 
-- `模板.epub`
+- `template.epub`
 
 `template/` 目录不是必须手动提供：
 
@@ -162,10 +162,10 @@
 ## exe编译方法
 该命令适用于 Windows 环境
 ```
-pyinstaller --add-data "epub maker.ico;." -F -w -i "epub maker.ico" "epub maker.py"
+pyinstaller --add-data "epub_maker.ico;." -F -w -i "epub_maker.ico" "epub_maker.py"
 ```
 
-编译完成后，如需使用“生成 EPUB”功能，请确保 `模板.epub` 与 exe 位于同一目录。
+编译完成后，如需使用“生成 EPUB”功能，请确保 `template.epub` 与 exe 位于同一目录。
 
 ## 许可模式
 本项目采用 GNU 通用公共许可证 v3.0 (GPL-3.0) 授权。

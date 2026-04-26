@@ -38,7 +38,7 @@ class EpubMakerApp:
         self.root.geometry("1300x780")
 
         # 使用资源路径函数设置窗口图标
-        icon_path = resource_path("epub maker.ico")
+        icon_path = resource_path("epub_maker.ico")
         self.root.iconbitmap(icon_path)
 
         # 当前内存文本、文件名、解析结果
@@ -62,7 +62,7 @@ class EpubMakerApp:
         self.base_dir = app_base_path()
         self.template_dir = os.path.join(self.base_dir, "template")
         self.output_dir = os.path.join(self.base_dir, "html")
-        self.template_epub_path = os.path.join(self.base_dir, "模板.epub")
+        self.template_epub_path = os.path.join(self.base_dir, "template.epub")
         self.epub_output_dir = os.path.join(self.base_dir, "epub")
 
         os.makedirs(self.template_dir, exist_ok=True)
